@@ -20,28 +20,12 @@ pipeline {
                     sh 'git clone https://${GITHUB_TOKEN}@github.com/nieve-web/todo-list-aws.git'
                     sh 'rm -f todo-list-aws/samconfig.toml'
                     dir('todo-list-aws') {
-                        sh 'git checkout develop'
+                        sh 'git checkout master' // Nos ubicaos en la rama master
                     }
                 }
             }
         }
         
-        stage('Static Test') {
-            steps {
-
-                sh '''
-                    export PYTHONPATH=$WORKSPACE/todo-list-aws/src
-                    python -m flake8 --exit-zero --format=pylint todo-list-aws/src > flake8.out
-                    bandit --exit-zero -r todo-list-aws/src -f custom -o bandit.out --msg-template "{abspath}:{line}: [{test_id}] {msg}"
-                '''
-                        
-                recordIssues tools: [
-                    flake8(name: 'Flake8', pattern: '**/flake8.out'),
-                    pyLint(name: 'Bandit', pattern: '**/bandit.out')
-                ]
-            }   
-        }
-
         stage('Deploy') {
             steps {
                 script {
@@ -49,12 +33,12 @@ pipeline {
                         sh 'sam build'  
                         sh '''
                             sam deploy \
-                                --stack-name todo-list-aws-staging \
+                                --stack-name todo-list-aws-production \
                                 --s3-bucket caso-practico-1d \
                                 --s3-prefix todo-list-aws \
                                 --capabilities CAPABILITY_IAM \
                                 --region us-east-1 \
-                                --parameter-overrides Stage="staging" \
+                                --parameter-overrides Stage="production" \
                                 --no-confirm-changeset \
                                 --no-fail-on-empty-changeset
                         '''
@@ -69,41 +53,18 @@ pipeline {
                     dir('todo-list-aws/test/integration') {
                         
                         def BASE_URL = sh(
-                            script: "aws cloudformation describe-stacks --stack-name todo-list-aws-staging --query 'Stacks[0].Outputs[?OutputKey==`BaseUrlApi`].OutputValue' --region us-east-1 --output text",
+                            script: "aws cloudformation describe-stacks --stack-name todo-list-aws-production --query 'Stacks[0].Outputs[?OutputKey==`BaseUrlApi`].OutputValue' --region us-east-1 --output text",
                             returnStdout: true
                         ).trim()
         
                         echo "Base URL obtenida: '${BASE_URL}'"
         
-                        // Pasar la variable correctamente al script de pruebas
-                        sh "BASE_URL=${BASE_URL} python3 -m pytest todoApiTest.py"
+                        // Pasar la variable correctamente al script de pruebas con el marcador "readonly"
+                        sh "BASE_URL=${BASE_URL} python3 -m pytest todoApiTest.py -m 'readonly'"
                     }
                 }
             }
         }
-
-
-        stage('Promote') {
-            steps {
-                script {
-                    dir('todo-list-aws') {
-                        // Configuro el usuario para los commits usando tus datos de GitHub
-                        sh 'git config user.email "fernandezsalazarnieve@gmail.com"'
-                        sh 'git config user.name "nieve-web"'
-                        
-                        // Cambio a la rama master
-                        sh 'git checkout master'
-                        
-                        // Realizo el merge de develop en master forzando un commit de merge (--no-ff)
-                        sh 'git merge develop --no-ff -m "Merge develop into master for release"'
-                        
-                        // Empujo los cambios a la rama master en el repositorio remoto
-                        sh 'git push origin master'
-                    }
-                }
-            }
-        }
-
 
     }
 }
