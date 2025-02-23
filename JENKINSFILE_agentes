@@ -1,0 +1,131 @@
+pipeline {
+    agent any
+    
+    environment {
+        GITHUB_TOKEN = credentials('github-token') // Guardamos el token como credencial en Jenkins
+    }
+
+    stages {
+        
+        stage('Clean Workspace') {
+            steps {
+                deleteDir()
+            }
+        }
+
+        stage('Get Code') {
+            steps {
+                script {
+                    sh 'echo "Ejecutando Get Code en: $(whoami)@$(hostname)"'
+                    sh 'rm -rf todo-list-aws'
+                    sh 'git clone https://${GITHUB_TOKEN}@github.com/nieve-web/todo-list-aws.git'
+                    sh 'rm -f todo-list-aws/samconfig.toml'
+                    dir('todo-list-aws') {
+                        sh 'git checkout develop'
+                    }
+                    stash name: 'source-code', includes: 'todo-list-aws/**' // Guardamos el código
+                }
+            }
+        }
+        
+        stage('Static Test') {
+            agent { label 'static-test' }
+            steps {
+                unstash 'source-code' // Recupera el código almacenado en Get Code
+                
+                sh 'echo "Ejecutando Static Test en: $(whoami)@$(hostname)"'
+                sh '''
+                    export PYTHONPATH=$WORKSPACE/todo-list-aws/src
+                    python -m flake8 --exit-zero --format=pylint todo-list-aws/src > flake8.out
+                    bandit --exit-zero -r todo-list-aws/src -f custom -o bandit.out --msg-template "{abspath}:{line}: [{test_id}] {msg}"
+                '''
+                        
+                recordIssues tools: [
+                    flake8(name: 'Flake8', pattern: '**/flake8.out'),
+                    pyLint(name: 'Bandit', pattern: '**/bandit.out')
+                ]
+            } 
+            post {
+                cleanup {
+                    cleanWs()
+                }
+            }   
+        }
+
+        stage('Deploy') {
+            steps {
+                script {
+                    sh 'echo "Ejecutando Deploy en: $(whoami)@$(hostname)"'
+                    
+                    dir('todo-list-aws') {  // Accede al directorio del código
+                        sh 'sam build'  
+                        sh '''
+                            sam deploy \
+                                --stack-name todo-list-aws-staging \
+                                --s3-bucket caso-practico-1d \
+                                --s3-prefix todo-list-aws \
+                                --capabilities CAPABILITY_IAM \
+                                --region us-east-1 \
+                                --parameter-overrides Stage="staging" \
+                                --no-confirm-changeset \
+                                --no-fail-on-empty-changeset
+                        '''
+                    }
+                }
+            }
+        }
+        
+        stage('Rest Test') {
+            agent { label 'rest-test' }
+            steps {
+                unstash name: 'source-code' // Recupera el código almacenado en Get Code
+                
+                script {
+                    sh 'echo "Ejecutando Rest Test en: $(whoami)@$(hostname)"'
+                    
+                    dir('todo-list-aws/test/integration') {
+                        
+                        def BASE_URL = sh(
+                            script: "aws cloudformation describe-stacks --stack-name todo-list-aws-staging --query 'Stacks[0].Outputs[?OutputKey==`BaseUrlApi`].OutputValue' --region us-east-1 --output text",
+                            returnStdout: true
+                        ).trim()
+        
+                        echo "Base URL obtenida: '${BASE_URL}'"
+        
+                        // Pasar la variable correctamente al script de pruebas
+                        sh "BASE_URL=${BASE_URL} python3 -m pytest todoApiTest.py"
+                    }
+                }
+            }
+            post {
+                cleanup {
+                    cleanWs()
+                }
+            }   
+        }
+        
+        stage('Promote') {
+            steps {
+                script {
+                    dir('todo-list-aws') {
+                        sh 'echo "Ejecutando Promete en: $(whoami)@$(hostname)"'
+                        sh '''
+                            whoami && hostname
+                            git config user.email "fernandezsalazarnieve@gmail.com" &&
+                            git config user.name "nieve-web" &&
+                            git checkout master &&
+                            git merge develop --no-ff -m "Merge develop into master for release CI" &&
+                            git push origin master
+                        '''
+                    }
+                }
+            }
+            post {
+                cleanup {
+                    cleanWs()
+                }
+            }              
+        }
+
+    }
+}
