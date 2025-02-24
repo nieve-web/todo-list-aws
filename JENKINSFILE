@@ -22,6 +22,8 @@ pipeline {
                     dir('todo-list-aws') {
                         sh 'git checkout master' // Nos ubicaos en la rama master
                     }
+                    // Descargar el samconfig.toml de la rama de production
+                    sh 'wget https://raw.githubusercontent.com/nieve-web/todo-list-aws-config/production/samconfig.toml'
                 }
             }
         }
