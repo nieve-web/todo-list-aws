@@ -22,6 +22,8 @@ pipeline {
                     dir('todo-list-aws') {
                         sh 'git checkout develop'
                     }
+                    // Descargar el samconfig.toml de la rama de STAGING
+                    sh 'wget https://raw.githubusercontent.com/nieve-web/todo-list-aws-config/staging/samconfig.toml'
                 }
             }
         }
